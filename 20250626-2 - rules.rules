@@ -1,0 +1,162 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Checks if any user is logged in.
+    function isLoggedIn() {
+      return request.auth != null;
+    }
+
+    // Gets the user's email. Returns null if not logged in or email is missing.
+    function getEmail() {
+      return isLoggedIn() && request.auth.token.email != null && request.auth.token.email != "" 
+        ? request.auth.token.email
+        : null;
+    }
+
+    // Gets the user's document from the 'users' collection. 
+    // IMPORTANT: It is probably better to use the UId as a document Id - this can be added later.
+    // IMPORTANT: (advice from the AI) This performs a 'get' operation and incurs a read cost. Use Firebase Auth Custom Claims for roles if performance/cost is a concern.
+    function getUserDoc() {
+      let email = getEmail(); // Use email as the document Id
+      return email != null ? get(/databases/$(database)/documents/users/$(email)) : null;
+    }
+
+    // Check if the user has a specific role, stored in a 'role' field within their document in the /users/{email} collection.
+    function hasRole(role) {
+      let userDoc = getUserDoc();
+      return isLoggedIn() && userDoc != null && userDoc.data.role == role;
+    }
+
+    // Returns the appropriate role for each user.
+    function isUser() {
+      return hasRole("user");
+    }
+
+    function isManager() {
+      return hasRole("manager");
+    }
+
+    function isAdmin() {
+      return hasRole("admin");
+    }
+
+    // Check the user's instanceId, stored in a 'instanceId' field within their document in the /users/{email} collection.
+    function isInstanceId(instanceId) {
+      let userDoc = getUserDoc();
+      return isLoggedIn() &&
+        userDoc != null &&
+        userDoc.data.instanceId != null && // Check if the field 'instanceId' exists on the user document
+        userDoc.data.instanceId == instanceId;
+    }
+
+    // Checks if the 'createdBy' field in a document matches the user's email.
+    // 'docData' will be either 'resource.data' (for existing doc) or 'request.resource.data' (for new/updated doc).
+    function isDocumentCreator(docData) {
+      return isLoggedIn() &&
+        getEmail() != null &&
+        docData != null &&
+        docData.createdBy == getEmail();
+    }
+
+    /*
+     * Collection: /users/{userEmail}
+     * Purpose: Control access to individual user profile documents.
+     * Assumption: userEmail (the document Id) is the Firebase Authentication Email.
+     * User profiles contain a 'role' field.
+     */
+    match /users/{userEmail} {
+        allow read: if (getEmail() == userEmail) || isManager() || isAdmin();
+        allow write: if (getEmail() == userEmail && isUser()) || isManager() || isAdmin();
+    }
+
+    /*
+     * Collection: /settings/{allSettings=**}
+     * Purpose: Global settings that can be read by all roles, but only written by admins.
+     */
+    match /settings/{allSettings=**} {
+        allow read: if isLoggedIn();
+        allow write: if isAdmin();
+    }
+
+    /*
+     * Collection: /instances/{instanceId}
+     * Purpose: Allow read for Admin or if user's instanceId matches document's instanceId. 
+     * Only admins can write (create, update, delete) instances
+     */
+    match /instances/{instanceId} {
+        allow read: if isInstanceId(instanceId) || isAdmin();
+        allow write: if isAdmin();
+
+    /*
+     * Using Recursive wildcard to apply read permissions to all sub-collections within an instance
+     * Any document in any sub-collection under /instances/{instanceId}.
+     * Allow read if Admin or if user's instanceId matches the parent instance's ID
+     * 'instanceId' here refers to the wildcard from the parent match block.
+     */
+     match /{path=**} {
+        // parent match block allows read, write for instanceId and admin
+        allow read: if isInstanceId(instanceId) || isAdmin();
+        allow write: if (isManager() && isInstanceId(instanceId)) || isAdmin() ;
+      }
+        
+    /*
+     * Sub-collection: /instances/{instanceId}/controls/{controlId}
+     * Purpose: Control data within an instance.
+     * Logic: Anyone can read. Only the creator can write/delete their own controls. Managers/Admins can write/delete any.
+     */
+    match /controls/{controlId} {
+        //read, write is inherited from the parent match block
+        allow write: if isDocumentCreator(request.resource.data); 
+        allow delete: if isDocumentCreator(resource.data) || isManager() || isAdmin();
+      }
+
+    /*
+     * Sub-collection: /instances/{instanceId}/risks/{riskId}
+     * Purpose: Risk data within an instance.
+     * Logic: Anyone can read. Only the creator can write/delete their own risks. Managers/Admins can write/delete any.
+     */
+    match /risks/{riskId} {
+        //read, write is inherited from the parent match block
+        allow write: if isDocumentCreator(request.resource.data); 
+        allow delete: if isDocumentCreator(resource.data) || isManager() || isAdmin();
+      }
+    }
+  }
+}
+
+/*
+Users
+	- User: Read instance
+    - Manager: ReadWrite instance
+    - Admin: ReadWrite all
+  
+Settings
+    - User/Manager/Admin: Read all
+  
+Settings/default/**
+	- User/Manager: Read all
+    - Admin: ReadWrite all
+  
+Instances
+	- User/Manager: Read instance
+    - Admin: ReadWrite all
+
+Instances/{instanceId}/companies
+    - User: Read instance
+    - Manager: ReadWrite instance
+    - Admin: ReadWrite all
+  
+Instances/{instanceId}/controls
+	- User/Manager: ReadWrite instance
+    - Admin: ReadWrite all
+
+Instances/{instanceId}/risks
+	- User: Read instance, Write personal
+    - Manager: ReadWrite instance
+    - Admin: ReadWrite all
+  
+Instances/{instanceId}/**
+	- User/Manager: Read instance
+    - Admin: ReadWrite all
+*/

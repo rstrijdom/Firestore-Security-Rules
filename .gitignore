@@ -1,0 +1,27 @@
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+
+# Text files
+*.txt
+
+# Environment variables
+.env
+
+# Key files
+id_rsa
+
+# VS Code
+.vscode/
+
+# Scratch directory
+/Scratch/
+
+20250306 - rules version 2 service.rules
+20250623 - rules.rules
+20250624 - rules.rules
+20250624-2 - rules.rules
+20250625 - rules.rules
+20250626 - rules.rules
